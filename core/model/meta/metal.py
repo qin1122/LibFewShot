@@ -24,8 +24,6 @@ class METAL(MetaModel):
     def __init__(self, inner_param, feat_dim, **kwargs):
         super(METAL, self).__init__(**kwargs)
         self.feat_dim = feat_dim
-        self.loss_func = nn.CrossEntropyLoss()
-        self.softmax = nn.LogSoftmax
         self.classifier = MAMLLayer(feat_dim, way_num=self.way_num)
         self.inner_param = inner_param
 
@@ -97,24 +95,22 @@ class METAL(MetaModel):
             output_list.append(output)
 
         output = torch.cat(output_list, dim=0)
-        loss = self.loss_func(output, query_target.contiguous().view(-1))
+        loss = F.cross_entropy(output, query_target.contiguous().view(-1))
         acc = accuracy(output, query_target.contiguous().view(-1))
         return output, acc, loss
 
     def set_forward_adaptation(self, support_set, query_set, support_target):
         lr = self.inner_param["lr"]
-
+        train_iters = self.inner_param["train_iter"] if self.training else self.inner_param["test_iter"]
+    
         fast_parameters = list(self.classifier.parameters())
         for parameter in self.classifier.parameters():
             parameter.fast = None
 
         self.emb_func.train()
         self.classifier.train()
-        for i in range(
-            self.inner_param["train_iter"]
-            if self.training
-            else self.inner_param["test_iter"]
-        ):
+
+        for i in range(train_iters):
             combined_set = torch.cat((support_set, query_set), 0)
             tmp_preds = self.forward_output(x=combined_set)
             support_preds, query_preds = tmp_preds[:-query_set.size(0)], tmp_preds[-query_set.size(0):]
@@ -123,11 +119,11 @@ class METAL(MetaModel):
             meta_loss_weights = dict(self.meta_loss.named_parameters())
             meta_query_loss_weights = dict(self.meta_query_loss.named_parameters())
 
-            support_loss = self.loss_func(support_preds, support_target)
-            
+            support_loss = F.cross_entropy(input=support_preds, target=support_target)
             support_task_state = [support_loss] + [v.mean() for v in classifier_weights.values()]
             support_task_state = torch.stack(support_task_state)
             normalized_support_task_state = (support_task_state - support_task_state.mean()) / (support_task_state.std() + 1e-12)
+        
             updated_meta_loss_weights = self.meta_loss_adapter(normalized_support_task_state, i, meta_loss_weights)
 
             support_y = torch.zeros(support_preds.shape).to(support_preds.device)
@@ -137,6 +133,7 @@ class METAL(MetaModel):
                 support_preds,
                 support_y
             ), -1)
+            
             normalized_support_task_state = (support_task_state - support_task_state.mean()) / (support_task_state.std() + 1e-12)
             meta_support_loss = self.meta_loss(normalized_support_task_state, i, params=updated_meta_loss_weights).mean().squeeze()
 
@@ -149,21 +146,20 @@ class METAL(MetaModel):
                 query_preds,
                 instance_entropy.view(-1, 1)
             ), -1)
+            
             normalized_query_task_state = (query_task_state - query_task_state.mean()) / (query_task_state.std() + 1e-12)
             updated_meta_query_loss_weights = self.meta_query_loss_adapter(normalized_query_task_state.mean(0), i, meta_query_loss_weights)
+
             meta_query_loss = self.meta_query_loss(normalized_query_task_state, i, params=updated_meta_query_loss_weights).mean().squeeze()
 
             total_loss = support_loss + meta_support_loss + meta_query_loss
 
             gradients = torch.autograd.grad(total_loss, fast_parameters, create_graph=True, allow_unused=True)
             fast_parameters = []
-            
-            for k, weight in enumerate(self.parameters()):
-                if weight.fast is None:
-                    weight.fast = weight - lr * grad[k]
-                else:
-                    weight.fast = weight.fast - lr * grad[k]
-                fast_parameters.append(weight.fast)
+            for k, weight in enumerate(list(self.classifier.parameters())):
+                if gradients[k] is not None:
+                    weight.fast = weight - lr * gradients[k] if weight.fast is None else weight.fast - lr * gradients[k]
+                    fast_parameters.append(weight.fast)
 
 def extract_top_level_dict(current_dict):
     output_dict = {}

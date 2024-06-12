@@ -1,15 +1,18 @@
-icludes:
+includes:
   - headers/data.yaml
   - headers/device.yaml
   - headers/misc.yaml
   - headers/model.yaml
   - headers/optimizer.yaml
 
-data_root: datasets/miniImageNet--ravi
 way_num: 5
 shot_num: 1
 
+# query_num: 15
+query_num: 3
+
 episode_size: 2
+
 train_episode: 2000
 test_episode: 600
 
@@ -20,11 +23,9 @@ epoch: 100
 optimizer:
   name: Adam
   kwargs:
-    lr: 1e-3
+    lr: 0.001
   other: ~
 
-# Conv64F
-# query_num: 15
 # backbone:
 #   name: Conv64F
 #   kwargs:
@@ -39,23 +40,21 @@ optimizer:
 #   kwargs:
 #     inner_param:
 #       lr: 1e-2
-#       iter: 5
 #       train_iter: 5
 #       test_iter: 10
 #     feat_dim: 1600
 
-# resnet12
-query_num: 3
+
 backbone:
-   name: resnet12
-   kwargs: ~
+  name: resnet12
+  kwargs: ~
 
 classifier:
-   name: METAL
-   kwargs:
+  name: METAL
+  kwargs:
      inner_param:
        lr: 1e-2
-       iter: 5
        train_iter: 5
-       test_iter: 10
-     feat_dim: 1600
+       test_iter: 5
+     feat_dim: 640
+
